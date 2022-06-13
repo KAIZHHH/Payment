@@ -1,0 +1,184 @@
+package com.kai.paymentdemo.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.kai.paymentdemo.entity.OrderInfo;
+import com.kai.paymentdemo.entity.Product;
+import com.kai.paymentdemo.enums.OrderStatus;
+import com.kai.paymentdemo.mapper.OrderInfoMapper;
+import com.kai.paymentdemo.mapper.ProductMapper;
+import com.kai.paymentdemo.service.OrderInfoService;
+import com.kai.paymentdemo.util.OrderNoUtils;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import javax.annotation.Resource;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+
+@Service
+@Slf4j
+public class OrderInfoServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo> implements OrderInfoService {
+
+    @Resource
+    private ProductMapper productMapper;
+
+    /*@Resource
+    private OrderInfoMapper orderInfoMapper;*/
+
+    /**
+     * 创建订单根据订单号
+     */
+    @Override
+    public OrderInfo createOrderByProductId(Long productId) {
+
+        //查找已存在但未支付的订单:防止恶意点击支付 不断生成新的二维码
+        OrderInfo orderInfo = this.getNoPayOrderByProductId(productId);
+        //数据库查询有该订单记录 则直接返回
+        if (orderInfo != null) {
+            return orderInfo;
+        }
+
+        //获取商品信息
+        Product product = productMapper.selectById(productId);
+
+        //生成订单
+        orderInfo = new OrderInfo();
+        orderInfo.setTitle(product.getTitle());
+        orderInfo.setOrderNo(OrderNoUtils.getOrderNo()); //订单号
+        orderInfo.setProductId(productId);
+        orderInfo.setTotalFee(product.getPrice()); //分
+        orderInfo.setOrderStatus(OrderStatus.NOTPAY.getType());
+        baseMapper.insert(orderInfo);
+
+        return orderInfo;
+    }
+
+    /**
+     * 存储订单二维码：code_url 两小时内有效 保存在有效期内也可以完成支付
+     *
+     * @param orderNo
+     * @param codeUrl
+     */
+    @Override
+    public void saveCodeUrl(String orderNo, String codeUrl) {
+        //1、查询条件
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);//通过订单号找到订单记录
+
+        //2、修改字段
+        OrderInfo orderInfo = new OrderInfo();
+        orderInfo.setCodeUrl(codeUrl);
+
+        //              根据查询条件 修改字段
+        baseMapper.update(orderInfo, queryWrapper);
+    }
+
+    /**
+     * 查询订单列表，并倒序查询
+     *
+     * @return
+     */
+    @Override
+    public List<OrderInfo> listOrderByCreateTimeDesc() {
+
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<OrderInfo>().orderByDesc("create_time");
+        return baseMapper.selectList(queryWrapper);
+    }
+
+    /**
+     * 根据订单号更新订单状态
+     *
+     * @param orderNo
+     * @param orderStatus
+     */
+    @Override
+    public void updateStatusByOrderNo(String orderNo, OrderStatus orderStatus) {
+
+        log.info("更新订单状态 ===> {}", orderStatus.getType());
+
+        //创建QueryWrapper构造器
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);
+
+        //更新为 指定的 orderStatus 订单状态
+        OrderInfo orderInfo = new OrderInfo();
+        orderInfo.setOrderStatus(orderStatus.getType());
+
+        baseMapper.update(orderInfo, queryWrapper);
+    }
+
+    /**
+     * 根据订单号获取订单状态
+     *
+     * @param orderNo
+     * @return
+     */
+    @Override
+    public String getOrderStatus(String orderNo) {
+
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);
+        OrderInfo orderInfo = baseMapper.selectOne(queryWrapper);
+        //处理空指针异常
+        if (orderInfo == null) {
+            return null;
+        }
+        return orderInfo.getOrderStatus();
+    }
+
+    /**
+     * 查询创建超过minutes分钟并且未支付的订单
+     *
+     * @param minutes
+     * @return
+     */
+    @Override
+    public List<OrderInfo> getNoPayOrderByDuration(int minutes) {
+
+        Instant instant = Instant.now().minus(Duration.ofMinutes(minutes));
+
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_status", OrderStatus.NOTPAY.getType());
+        queryWrapper.le("create_time", instant);
+
+        List<OrderInfo> orderInfoList = baseMapper.selectList(queryWrapper);
+
+        return orderInfoList;
+    }
+
+    /**
+     * 根据订单号获取订单
+     *
+     * @param orderNo
+     * @return
+     */
+    @Override
+    public OrderInfo getOrderByOrderNo(String orderNo) {
+
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);
+        OrderInfo orderInfo = baseMapper.selectOne(queryWrapper);
+
+        return orderInfo;
+    }
+
+
+    /**
+     * 根据商品id查询未支付订单
+     * 防止重复创建订单对象
+     *
+     * @param productId
+     * @return
+     */
+    private OrderInfo getNoPayOrderByProductId(Long productId) {
+
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("product_id", productId);
+        queryWrapper.eq("order_status", OrderStatus.NOTPAY.getType());
+//        queryWrapper.eq("user_id", userId);
+        OrderInfo orderInfo = baseMapper.selectOne(queryWrapper);
+        return orderInfo;
+    }
+}
